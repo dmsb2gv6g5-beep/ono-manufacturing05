@@ -370,14 +370,6 @@ button,input,select{font:inherit}button{cursor:pointer}.top{height:64px;backgrou
 const SUPABASE_URL='https://ycwaqqtdqcshuflyksnz.supabase.co';
 const SUPABASE_KEY='sb_publishable_4prKNDy0wQAFch_qblfvwg_kcud-fjD';
 const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
-/* ===== RMM / OMM 月間計画：Supabase共有 ===== */
-const PLAN_CLOUD_TABLE='production_plan_master';
-const PLAN_CLOUD_DEPS=['1RMM','2RMM','2RMM-D','2OMM'];
-const planCloudCache={},planCloudLoaded={};
-async function loadSharedProductionPlan(month){if(planCloudLoaded[month])return planCloudCache[month]||{};try{const {data,error}=await supabaseClient.from(PLAN_CLOUD_TABLE).select('department,monthly_plan').eq('plan_month',month);if(error)throw error;const v={};(data||[]).forEach(r=>v[r.department]=Number(r.monthly_plan)||0);planCloudCache[month]=v;planCloudLoaded[month]=true;return v}catch(e){console.warn('共有計画の読み込みに失敗',e);return {}}}
-async function saveSharedProductionPlan(month,values){try{const rows=PLAN_CLOUD_DEPS.map(dep=>({plan_month:month,department:dep,monthly_plan:Math.max(0,Math.round(Number(values[dep])||0)),updated_at:new Date().toISOString()}));const {error}=await supabaseClient.from(PLAN_CLOUD_TABLE).upsert(rows,{onConflict:'plan_month,department'});if(error)throw error;planCloudCache[month]={...values};planCloudLoaded[month]=true;return true}catch(e){console.error('共有計画の保存に失敗',e);return false}}
-async function syncProductionPlanFromCloud(month){const v=await loadSharedProductionPlan(month);if(!Object.keys(v).length)return false;const [y,m]=month.split('-').map(Number);let changed=false;PLAN_CLOUD_DEPS.forEach(dep=>{if(v[dep]===undefined)return;const k=planKey(y,m,dep),x=String(v[dep]);if(localStorage.getItem(k)!==x){localStorage.setItem(k,x);reallocate(dep,y,m);changed=true}});return changed}
-
 </script>
 
 <style id="repair-status-style">
@@ -1468,8 +1460,6 @@ async function syncProductionPlanFromCloud(month){const v=await loadSharedProduc
     </div>
 
     <div class="menu">
-      <button onclick="openDailyManagement()"><span class="title">日計管理</span><span class="arrow">›</span><div class="desc">1部・2部・タフトの売上をカレンダー形式で日別に入力し、費用・経常利益を管理します。</div></button>
-      <button onclick="openLaborManagement()"><span class="title">人件費管理</span><span class="arrow">›</span><div class="desc">臨時員・派遣の勤務時間と人件費を管理します。</div></button>
       <button onclick="openProduction()"><span class="title">生産管理</span><span class="arrow">›</span><div class="desc">1部RMM・2部RMM・2部OMMの日別実績と、RMM・OMM・全体の進捗を管理します。</div></button>
       <button onclick="openDefect()"><span class="title">不適合管理</span><span class="arrow">›</span><div class="desc">不適合内容・発生工程・発生者を記録し、部門別の不適合状況を確認します。</div></button>
       <button onclick="openPersonnel()"><span class="title">人員管理</span><span class="arrow">›</span><div class="desc">作業ごとの投入人数を15分刻みで入力し、投入人時を自動計算します。</div></button>
@@ -1482,7 +1472,6 @@ async function syncProductionPlanFromCloud(month){const v=await loadSharedProduc
   <div class="dashboard-right">
     <div class="dashboard-status-heading">状況把握</div>
     <div class="dashboard-kpi-cards" aria-label="主要管理指標">
-      <div class="dashboard-kpi-card"><div class="kpi-label">当月売上</div><div class="kpi-value" id="dashCardSales">—</div><div class="kpi-note" id="dashCardSalesNote">日計管理</div></div>
       <div class="dashboard-kpi-card">
         <div class="kpi-label">生産実績</div>
         <div class="kpi-value production-split-value">
@@ -1505,7 +1494,6 @@ async function syncProductionPlanFromCloud(month){const v=await loadSharedProduc
           <span id="dashCardQualityOMMNote">OMM 不適合 —</span>
         </div>
       </div>
-      <div class="dashboard-kpi-card"><div class="kpi-label">人件費率</div><div class="kpi-value" id="dashCardLabor">—</div><div class="kpi-note">人件費管理</div></div>
     </div>
   </div>
 </div>
@@ -2098,9 +2086,8 @@ function renderPressSummary(y,m,dep){
 function daysInMonth(y,m){return new Date(y,m,0).getDate()}
 function dayStatus(y,m,d){
  const k=statusKey(y,m,d), saved=localStorage.getItem(k);
+ if(saved)return saved;
  const dt=new Date(y,m-1,d),s=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
- // 保存済みの稼働／休業設定を最優先。土日・祝日はあくまで初期値。
- if(saved==='稼働'||saved==='休業')return saved;
  return dt.getDay()===0||dt.getDay()===6||HOLIDAYS[s]?'休業':'稼働';
 }
 function workingDays(y,m){let a=[];for(let d=1;d<=daysInMonth(y,m);d++)if(dayStatus(y,m,d)==='稼働')a.push(d);return a}
@@ -2166,11 +2153,11 @@ function fillMonths(id){
  s.value=`${cy}-${String(cm).padStart(2,'0')}`;
 }
 function setProdDept(d){prodDept=d;document.querySelectorAll('#production .tabs button').forEach(x=>x.classList.remove('active'));document.getElementById({'1RMM':'pt1','2RMM':'pt2','2RMM-D':'pt3','2OMM':'pt4','all':'pt5'}[d]).classList.add('active');renderProduction()}
-async function applyAllPlans(){
- const [y,m]=document.getElementById('month').value.split('-').map(Number);const ids={'1RMM':'plan1RMM','2RMM':'plan2RMM','2RMM-D':'plan2RMMD','2OMM':'plan2OMM'};const values={};
- for(const dep of DEPS){const v=Number(document.getElementById(ids[dep]).value);if(!Number.isFinite(v)||v<0){alert(NAMES[dep]+'の累計計画を入力してください。');return}values[dep]=v}
- for(const dep of DEPS){localStorage.setItem(planKey(y,m,dep),String(values[dep]));reallocate(dep,y,m)}
- renderProduction();const ok=await saveSharedProductionPlan(`${y}-${String(m).padStart(2,'0')}`,values);if(!ok)alert('端末には保存されましたが、共有保存に失敗しました。ネット接続を確認してください。');
+function applyAllPlans(){
+ const [y,m]=document.getElementById('month').value.split('-').map(Number);
+ const ids={'1RMM':'plan1RMM','2RMM':'plan2RMM','2RMM-D':'plan2RMMD','2OMM':'plan2OMM'};
+ for(const dep of DEPS){const v=Number(document.getElementById(ids[dep]).value);if(!Number.isFinite(v)||v<0){alert(NAMES[dep]+'の累計計画を入力してください。');return}localStorage.setItem(planKey(y,m,dep),String(v));reallocate(dep,y,m)}
+ renderProduction();
 }
 function setDayStatus(y,m,d,v){localStorage.setItem(statusKey(y,m,d),v);DEPS.forEach(dep=>reallocate(dep,y,m))}
 function renderProduction(){
@@ -4029,9 +4016,10 @@ document.addEventListener('DOMContentLoaded',loadRatePdfState);
   async function boot(){
     const before={};
     for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&wanted(k))before[k]=localStorage.getItem(k);}
-    // 起動時はクラウドを正として先に取得する。
-    // PC2など別端末に残った古いlocalStorageを先にpushすると、
-    // 最新のクラウドデータを古い値で上書きしてしまうため、push先行はしない。
+    // 端末側で直前に編集した内容を先にクラウドへ保存してから取得する。
+    // 特に勤務時間を「削除→0」にした場合、古いクラウド値で上書きされる
+    // レースを防ぐ。
+    await pushAll();
     await pullAll();
     // 日計管理の費用マスタは、クラウド側に古い項目数のデータが残っていても
     // 現行の標準7項目を欠落させない。既存の費用項目・月間予算・実績は保持する。
@@ -4970,5 +4958,3 @@ function renderProcessAnalysis(process){
   });
 })();
 </script>
-
-<script id="shared-production-plan-startup">(function(){async function sync(){const e=document.getElementById('month');if(!e||!e.value)return;const c=await syncProductionPlanFromCloud(e.value);if(c&&typeof renderProduction==='function')renderProduction()}function attach(){const e=document.getElementById('month');if(!e||e.__sharedPlanHooked)return;e.__sharedPlanHooked=true;e.addEventListener('change',()=>setTimeout(sync,50));setTimeout(sync,700)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',attach);else attach()})();</script>
